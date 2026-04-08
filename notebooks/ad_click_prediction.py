@@ -22,7 +22,7 @@ def _():
     import seaborn as sns
 
     # Sklearn: Model Selection and Preprocessing
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import train_test_split, cross_validate
     from sklearn.preprocessing import StandardScaler, OneHotEncoder
     from sklearn.compose import ColumnTransformer
     from sklearn.pipeline import Pipeline
@@ -38,26 +38,26 @@ def _():
 
 
     # Sklearn: Metrics and Evaluation
-    from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, confusion_matrix, roc_curve, auc
+    from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, ConfusionMatrixDisplay, RocCurveDisplay, auc
     from sklearn.model_selection import GridSearchCV
     import shap
 
     return (
         ColumnTransformer,
+        ConfusionMatrixDisplay,
         GradientBoostingClassifier,
         GridSearchCV,
         LogisticRegression,
+        Pipeline,
         RandomForestClassifier,
+        RocCurveDisplay,
         StandardScaler,
-        accuracy_score,
-        auc,
         classification_report,
-        confusion_matrix,
+        cross_validate,
         mo,
+        np,
         pd,
         plt,
-        roc_auc_score,
-        roc_curve,
         sns,
         train_test_split,
     )
@@ -253,7 +253,6 @@ def _(advertising_df, mo, sns):
 @app.cell
 def _(advertising_df, mo, sns):
     # Age vs Time on Site Analysis vs Target
-
     joint_plot_age_time = sns.jointplot(
         data=advertising_df, 
         x='Age', 
@@ -303,14 +302,20 @@ def _(advertising_df, mo, sns):
 
 
 @app.cell
-def _(advertising_df):
-    advertising_df
+def _(advertising_df, mo):
+    mo.vstack([
+        advertising_df,
+        mo.md(f"""
+        * **Time-based Patterns:** I suspect that users are more likely to click on ads during weekends or in the evening. To test this, I am creating new features from the `Timestamp` data.
+        * **Dropping Noisy Data:** Columns like **City**, **Country**, and **Ad Topic** have too many unique values. Removing them helps the model focus on important patterns and prevents it from simply "memorizing" specific records.
+        """)
+    ])
     return
 
 
 @app.cell
-def _(advertising_df, pd):
-    # feature Engineering
+def _(advertising_df, mo, pd):
+    # feature Engineering: add and drop columns
 
     # Copy the original dataset
     processed_advertising = advertising_df.copy()
@@ -324,6 +329,7 @@ def _(advertising_df, pd):
     # Create is_evening: 1 if it's evening/night (e.g., 18:00 to 23:59), 0 otherwise
     processed_advertising['is_evening'] = (processed_advertising['Timestamp'].dt.hour >= 18).astype(int)
 
+    # drop columns
     columns_to_drop = [
         'City', 
         'Country', 
@@ -333,7 +339,7 @@ def _(advertising_df, pd):
 
     processed_advertising = processed_advertising.drop(columns=columns_to_drop, errors='ignore')
 
-    processed_advertising
+    mo.ui.table(processed_advertising, label="Processed Data Preview")
     return (processed_advertising,)
 
 
@@ -341,11 +347,10 @@ def _(advertising_df, pd):
 def _(
     ColumnTransformer,
     StandardScaler,
-    mo,
     processed_advertising,
     train_test_split,
 ):
-    # Data Preprocessing Pipeline: Train/Test Split, Scaling
+    # Train/Test Split, Scaling
 
     # Separating features and target
     X = processed_advertising.drop('Clicked on Ad', axis=1)
@@ -379,246 +384,151 @@ def _(
 
     # Output as Pandas DataFrame
     preprocessor.set_output(transform="pandas")
-
-    # Fit & Transform
-    X_train_processed = preprocessor.fit_transform(X_train)
-    X_test_processed = preprocessor.transform(X_test)
-
-    mo.md(f"""
-    * **Training Data:** {X_train_processed.shape}
-    * **Testing Data:** {X_test_processed.shape}
-    """)
-    return X_test_processed, X_train_processed, y_test, y_train
-
-
-@app.cell
-def _(
-    LogisticRegression,
-    X_test_processed,
-    X_train_processed,
-    accuracy_score,
-    mo,
-    roc_auc_score,
-    y_test,
-    y_train,
-):
-    # baseline Model (log regression)
-    # initialize and train our simplest, baseline model
-    log_reg = LogisticRegression(random_state=42)
-    log_reg.fit(X_train_processed, y_train)
-
-    # predict
-    y_pred = log_reg.predict(X_test_processed)
-
-    # probabilities for the ROC-AUC metric
-    y_prob = log_reg.predict_proba(X_test_processed)[:, 1] 
-
-    # calc ROC-AUC
-    acc = accuracy_score(y_test, y_pred)
-    roc_auc = roc_auc_score(y_test, y_prob)
-
-    mo.md(f"""
-    ### 🚀 First Test Result: Logistic Regression
-
-    * **Accuracy:** `{acc:.4f}`
-    * **ROC-AUC Score:** `{roc_auc:.4f}` The closer to 1.0, the better
-
-    """)
-    return
-
-
-@app.cell
-def _(classification_report, confusion_matrix, mo, plt, roc_auc_score, sns):
-    # Create a universal function to evaluate all our models!
-    def evaluate_model(model, name, X_test, y_test):
-
-        y_pred = model.predict(X_test)
-        y_prob = model.predict_proba(X_test)[:, 1] 
-
-        # Calculate metrics
-        roc_auc = roc_auc_score(y_test, y_prob)
-        report = classification_report(y_test, y_pred)
-
-        # Confusion Matrix
-        cm = confusion_matrix(y_test, y_pred, labels=[1, 0])
-        _fig, _ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False, ax=_ax,
-                    xticklabels=['Clicked (1)', 'Not Clicked (0)'],
-                    yticklabels=['Clicked (1)', 'Not Clicked (0)'])
-        _ax.set_title(f'Confusion Matrix: {name}', weight='bold')
-        plt.tight_layout()
-
-        return mo.vstack([
-            mo.md(f"### 🤖 Model: {name}"),
-            mo.md(f"**ROC-AUC Score:** `{roc_auc:.4f}`"),
-            mo.md(f"**Classification Report:**\n```text\n{report}\n```"),
-            _fig,
-            mo.md("---")
-        ])
-
-
-    return (evaluate_model,)
+    return X_test, X_train, preprocessor, y_test, y_train
 
 
 @app.cell
 def _(
     GradientBoostingClassifier,
     LogisticRegression,
+    Pipeline,
     RandomForestClassifier,
-    X_test_processed,
-    X_train_processed,
-    evaluate_model,
+    X_train,
+    cross_validate,
     mo,
-    y_test,
+    np,
+    pd,
+    preprocessor,
     y_train,
 ):
-    # Initialization Models
+    # Models and Pipeline
     models = {
-        "Logistic Regression": LogisticRegression(random_state=42),
-        "Random Forest": RandomForestClassifier(random_state=42, n_estimators=100),
+        'LogReg': LogisticRegression(max_iter=1000, class_weight='balanced'),
+        'RandomForest': RandomForestClassifier(random_state=42, class_weight='balanced'),
         "Gradient Boosting": GradientBoostingClassifier(random_state=42)
     }
 
-    results_ui = []
-    for name, model in models.items():
-        model.fit(X_train_processed, y_train)
-        ui_element = evaluate_model(model, name, X_test_processed, y_test)
-        results_ui.append(ui_element)
+    scoring_metrics = ['roc_auc', 'accuracy', 'precision', 'recall', 'f1']
 
-    # display all reports together
-    mo.vstack(results_ui)
+    model_comparison = []
+
+    # Evaluating models, Cross validation
+    for name, model in models.items():
+
+        pipeline = Pipeline(steps=[
+            ('preprocessor', preprocessor),
+            ('classifier', model)
+        ])
+
+        cv_results = cross_validate(
+            pipeline, 
+            X_train, 
+            y_train, 
+            cv=5, 
+            scoring=scoring_metrics,
+            n_jobs=-1
+        )
+
+        model_comparison.append({
+            'Model': name, 
+            'ROC-AUC': np.mean(cv_results['test_roc_auc']),
+            'Accuracy': np.mean(cv_results['test_accuracy']),
+            'Precision': np.mean(cv_results['test_precision']),
+            'Recall': np.mean(cv_results['test_recall']),
+            'F1-Score': np.mean(cv_results['test_f1'])
+        })
+
+
+
+    results_df = pd.DataFrame(model_comparison).sort_values('ROC-AUC', ascending=False)
+    mo.ui.table(results_df.round(4), label="Model Evaluation Results")
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     mo.md("""
-    * **Observation:** The simplest model (Logistic Regression) easily beat the complex ones, hitting 97.5% accuracy. It caught almost all real clicks flawlessly and saved our ad budget.
-    * **The "Why":** Our dataset is small and highly logical. In these cases, complex models overcomplicate things and get confused by noise (overfitting). A simple model just draws a straight line and hits the target.
-    * **Next Step:** Try tuning the hyperparameters. Since this model is completely transparent, we can look inside its "brain". Next, we’ll find out the most important thing: what exactly makes a user click the ad — age, income, or time spent on the site?
+    * **Observation:** The baseline model (LogReg) shows quite good results (96% accuracy) and other metrics are also very good. Therefore, let's choose this simple model for its interpretability and efficiency.
     """)
     return
-
-
-@app.cell
-def _(GridSearchCV, LogisticRegression, X_train_processed, mo, y_train):
-    # Hyperparameter Tuning via GridSearchCV 
-    param_grid = {
-        'C': [0.01, 0.1, 1, 10, 100],         
-        'l1_ratio': [0, 1],              
-        'solver': ['liblinear'],      
-        'max_iter': [1000]              
-    }
-
-    # grid_search
-    grid_search = GridSearchCV(
-        estimator=LogisticRegression(random_state=42),
-        param_grid=param_grid,
-        cv=5,               
-        scoring='accuracy',
-        n_jobs=-1,          
-        verbose=1 
-    )
-
-    # training
-    grid_search.fit(X_train_processed, y_train)
-
-    best_log_reg = grid_search.best_estimator_
-    best_params = grid_search.best_params_
-    best_score = grid_search.best_score_
-
-    # display
-    mo.md(f"""
-    * **Best Parameters:** `{best_params}`
-    * **Cross-Validation Accuracy:** `{best_score:.4f}`
-
-    Now we can use this optimized model **{best_log_reg}** for the final evaluation and to extract the weights!!
-    """)
-    return (best_log_reg,)
 
 
 @app.cell
 def _(
-    X_test_processed,
-    X_train_processed,
-    best_log_reg,
-    evaluate_model,
+    GridSearchCV,
+    LogisticRegression,
+    Pipeline,
+    X_train,
     mo,
-    pd,
-    plt,
-    sns,
-    y_test,
+    preprocessor,
+    y_train,
 ):
-    # final evaluation on the test set
-    evaluation_ui = evaluate_model(best_log_reg, "Optimized Logistic Regression (C=0.1)", X_test_processed, y_test)
+    # Hyperparameter Tuning via GridSearchCV 
 
-    # Extracting model weights and feature names
-    feature_names = X_train_processed.columns
-    coefficients = best_log_reg.coef_[0]
-
-    # Sorting weights in a DataFrame for visualization
-    coef_df = pd.DataFrame({
-        'Feature': feature_names,
-        'Weight': coefficients
-    }).sort_values(by='Weight', ascending=False)
-
-    # Feature Importances
-    fig_weights, ax_weights = plt.subplots(figsize=(8, 6))
-
-    # Blue for positive impact, Red for negative
-    colors = ['#1f77b4' if w > 0 else '#d62728' for w in coef_df['Weight']]
-    sns.barplot(x='Weight', y='Feature', hue='Feature', data=coef_df, palette=colors, ax=ax_weights, legend=False)
-
-    ax_weights.set_title('What drives the click?', weight='bold', fontsize=14, pad=15)
-    ax_weights.set_xlabel('Feature Weight')
-    ax_weights.set_ylabel('')
-
-    ax_weights.axvline(0, color='black', linewidth=1)
-    plt.tight_layout()
-
-    mo.vstack([
-        evaluation_ui,
-        mo.md("""
-        ### ⚖️ What Drives the Decision?
-        * **Right side (Blue):** Factors that increase the likelihood of clicking.
-        * **Left side (Red):** Factors that decrease the likelihood of clicking.
-        """),
-        fig_weights
+    # Re-initializing the pipeline
+    log_reg_pipeline = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('classifier', LogisticRegression(random_state=42, max_iter=2000))
     ])
-    return
+
+    param_grid = {
+        'classifier__C': [0.1, 1, 10, 100],
+        'classifier__solver': ['saga'],
+        'classifier__l1_ratio': [0, 0.5, 1]
+    }
+
+    grid_search = GridSearchCV(
+        estimator=log_reg_pipeline,
+        param_grid=param_grid,
+        cv=5,               
+        scoring='accuracy',
+        n_jobs=-1,
+        verbose=1
+    )
+
+    grid_search.fit(X_train, y_train)
+
+    best_log_reg = grid_search.best_estimator_
+    best_params = grid_search.best_params_
+
+
+    mo.md(f"""
+    ### Optimization Results
+    * **(CV Accuracy):** `{grid_search.best_score_:.2%}`
+    * **(C):** `{best_params['classifier__C']}`
+    * **(L1 Ratio):** `{best_params['classifier__l1_ratio']}`
+    """)
+    return (grid_search,)
 
 
 @app.cell
-def _(X_test_processed, auc, best_log_reg, mo, plt, roc_curve, y_test):
-    # Roc-Auc curve
+def _(
+    ConfusionMatrixDisplay,
+    RocCurveDisplay,
+    X_test,
+    classification_report,
+    grid_search,
+    mo,
+    plt,
+    y_test,
+):
+    # Predictions on test data. Confussion Matrix, Roc Curve
+    y_pred = grid_search.predict(X_test)
+    report = classification_report(y_test, y_pred)
 
-    # Getting probabilities
-    y_probs_final = best_log_reg.predict_proba(X_test_processed)[:, 1]
+    fig_eval, ax_eval = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Computing ROC & AUC
-    fpr_final, tpr_final, _thresholds_final = roc_curve(y_test, y_probs_final)
-    roc_auc_value = auc(fpr_final, tpr_final)
-
-    # Visualization
-    fig_roc_final, ax_roc_final = plt.subplots(figsize=(8, 6))
-
-    ax_roc_final.plot(fpr_final, tpr_final, color='#1f77b4', lw=3, label=f'ROC Curve (AUC = {roc_auc_value:.4f})')
-    ax_roc_final.plot([0, 1], [0, 1], color='#7f7f7f', lw=2, linestyle='--')
-
-    ax_roc_final.set_xlabel('False Positive Rate')
-    ax_roc_final.set_ylabel('True Positive Rate')
-    ax_roc_final.set_title('ROC Curve - Optimized Model', weight='bold')
-    ax_roc_final.legend(loc="lower right")
-    ax_roc_final.grid(True, alpha=0.3)
-
-    plt.tight_layout()
+    ConfusionMatrixDisplay.from_estimator(
+        grid_search, X_test, y_test, cmap='Blues', ax=ax_eval[0]
+    )
+    RocCurveDisplay.from_estimator(
+        grid_search, X_test, y_test, ax=ax_eval[1]
+    )
 
     mo.vstack([
-        mo.md(f"""
-        ### 🛡️ ROC-AUC
-        **Score:** `{roc_auc_value:.4f}`
-        """),
-        fig_roc_final
+        mo.md("## Model Evaluation on Test Set"),
+        mo.md(f"```\n{report}\n```"),
+        mo.as_html(fig_eval)
     ])
     return
 
@@ -626,10 +536,45 @@ def _(X_test_processed, auc, best_log_reg, mo, plt, roc_curve, y_test):
 @app.cell
 def _(mo):
     mo.md("""
-    * **Core Drivers:** Who clicks the most? Older users (`Age` has the highest positive impact). Who ignores the ad? High-income (`Area Income`) and highly active digital users (those with high `Daily Time on Site` and `Daily Internet Usage`).
-    * **The Weekend Effect:** Our hypothesis was spot on! The `is_weekend` feature proves that ads get significantly more clicks on Saturdays and Sundays. A clear signal to reallocate the marketing budget.
-    * **Time & Gender Impact:** Gender has a minor negative impact, while evening hours (`is_evening`) show almost zero effect.
-    * **A Cleaner Model:** Removing the geographical noise (countries) resulted in a much more stable, interpretable, and production-ready model.
+    * The model performs excellently with 98% accuracy; other metrics look great as well. Let's now examine which features are important and how they impact the model.
+    """)
+    return
+
+
+@app.cell
+def _(grid_search, mo, pd, plt):
+    # Features Importance
+    names = grid_search.best_estimator_['preprocessor'].get_feature_names_out()
+    coefs = grid_search.best_estimator_['classifier'].coef_[0]
+
+    signed_features = pd.Series(coefs, index=names).sort_values(ascending=False).head(10)
+
+    fig_sgn, ax_sgn = plt.subplots(figsize=(10, 6))
+
+    signed_features.plot(kind='barh', color='steelblue', ax=ax_sgn)
+
+    ax_sgn.axvline(0, color='black', linewidth=1)
+
+    for bar in ax_sgn.patches:
+        if bar.get_width() < 0:
+            bar.set_color('indianred')
+
+    ax_sgn.set_title("Top 10 Feature Weights")
+    ax_sgn.set_xlabel("Coefficient Weight")
+    plt.tight_layout()
+
+    mo.vstack([
+        mo.md("### **Feature Weights**"),
+        mo.as_html(fig_sgn)
+    ])
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ### 🧠 Feature Analysis
+    * Our hypothesis was fully confirmed: the new time features **is_weekend** had a significant impact on the model's prediction. **Age** is the strongest positive factor (higher age means more clicks), while **Daily Time Spent on Site** and **Daily Internet Usage** are the strongest negative factor.
     """)
     return
 
