@@ -1,8 +1,8 @@
 ## About Project
 This project focuses on predicting digital advertisement clicks using a dataset of user behaviors. Instead of just chasing a high score, the goal was to extract actionable business insights: **Who** clicks, **when** do they click, and **why**?
 The **result:** An optimized Logistic Regression model with a **99.2% AUC**, (**accuracy: 98%**) capable of cutting through the noise to identify high-conversion users.
-**Smart Feature Engineering**: I replaced noisy geographical data with custom-built features like is_weekend. This single change significantly boosted the model’s predictive power.
-**Model Interpretation**: I didn't stop at accuracy. Using Feature Importance analysis, I proved that user demographics (Age, Income) and timing (Weekends) are the real drivers, while the "Time of Day" was largely irrelevant.
+**Feature Engineering**: I replaced noisy geographical data with custom-built features like is_weekend. This single change significantly boosted the model’s predictive power.
+**Model Interpretation**: Through Feature Importance analysis, I demonstrated that **weekends** and **age** act as strong positive predictors. Conversely, **daily time spent on site**, **daily internet usage**, and **area income** exhibit a significant negative correlation with the target variable
 **Optimization**: Hyperparameter tuning via GridSearchCV to ensure the model generalizes well to new, unseen data.
 
 ## Dataset from Kaggle
