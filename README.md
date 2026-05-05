@@ -23,4 +23,4 @@ poetry run marimo edit notebooks/ad_click_prediction.py
 ```
 
 ## Live Report
-(https://davitugl.github.io/ad-click-prediction/)
+[Live Interactive Report](https://davitugl.github.io/ad-click-prediction/)
