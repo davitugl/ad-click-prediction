@@ -28,13 +28,9 @@ def _():
     from sklearn.pipeline import Pipeline
 
 
-
-
     # Sklearn: Machine Learning Models
     from sklearn.linear_model import LogisticRegression
     from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-
-
 
 
     # Sklearn: Metrics and Evaluation
@@ -58,6 +54,7 @@ def _():
         np,
         pd,
         plt,
+        shap,
         sns,
         train_test_split,
     )
@@ -109,58 +106,63 @@ def _(advertising_df, mo):
 
 @app.cell
 def _(advertising_df, mo, pd):
-    # DATA QUALITY & PROFILING
-    # Check for missing values and duplicates, unique values
-    missing_values = advertising_df.isna().sum()
-    duplicate_count = advertising_df.duplicated().sum()
+    # Check duplicates and missing values
+    def check_missing_duplicates(df: pd.DataFrame) -> dict:
+        return {
+            "duplicates": df.duplicated().sum(),
+            "total_missing": df.isna().sum().sum()
+        }
+
+    miss_dupl_stats = check_missing_duplicates(advertising_df)
 
     mo.vstack([
-        mo.md("## 🔍 Data Quality"),
-        mo.md(f"#### Duplicates: **{duplicate_count}**"),
-        mo.md(f"#### Missing Values: **{missing_values.sum()}**"),
-        mo.ui.table(
-            pd.DataFrame({
-                "Data Type": advertising_df.dtypes.astype(str),
-                "Unique Values": advertising_df.nunique()
-            }),
-            selection=None
-        )
+        mo.md(f"**Duplicates:** {miss_dupl_stats['duplicates']}"),
+        mo.md(f"**Missing Values:** {miss_dupl_stats['total_missing']}")
+    ])
+    return
+
+
+@app.cell
+def _(advertising_df, mo, pd):
+    # Column types and unique values
+    def check_schema(df: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame({
+            "Dtype": df.dtypes.astype(str),
+            "Unique Values": df.nunique()
+        })
+    # Get schema stats
+    schema_info = check_schema(advertising_df)
+
+    mo.vstack([
+        mo.md("### 📑 Column Analysis"),
+        mo.ui.table(schema_info)
     ])
     return
 
 
 @app.cell
 def _(advertising_df, mo, pd, plt, sns):
-    # TARGET DISTRIBUTION
-    target_counts = advertising_df['Clicked on Ad'].value_counts()
-    target_percent = (advertising_df['Clicked on Ad'].value_counts(normalize=True) * 100).round(2).astype(str) + '%'
+    # Target distribution
+    def analyze_target(df: pd.DataFrame, column: str):
+        counts = df[column].value_counts()
+        percent = (df[column].value_counts(normalize=True) * 100).round(2)
+        summary = pd.DataFrame({"Count": counts, "Percentage (%)": percent})
 
-    target_summary = pd.DataFrame({
-        "Count": target_counts,
-        "Percentage (%)": target_percent
-    })
+        fig, ax = plt.subplots(figsize=(5, 4))
+        sns.countplot(data=df, x=column, ax=ax, palette="viridis", hue=column, legend=False)
+        ax.set_title(f"Distribution: {column}")
+        plt.close()
 
-    fig, ax = plt.subplots(figsize=(5, 4))
-    sns.countplot(
-        data=advertising_df, 
-        x='Clicked on Ad', 
-        palette=['#3498db', '#e74c3c'], 
-        hue='Clicked on Ad', 
-        legend=False, 
-        ax=ax
-    )
+        return summary, fig
 
-    ax.set_title("Visual Balance (0 vs 1)")
-    ax.set_xlabel("Clicked on Ad (0 = No, 1 = Yes)")
-    ax.set_ylabel("Count")
-
+    target_summary, target_plot = analyze_target(advertising_df, 'Clicked on Ad')
 
     mo.vstack([
-        mo.md("## 🎯 Target Variable Distribution"),
+        mo.md(f"## 🎯 Target Variable Distribution"),
         mo.hstack([
             mo.ui.table(target_summary, selection=None),
-            fig
-        ], justify="start", gap=4)
+            target_plot
+        ], justify="start", gap=2)
     ])
     return
 
@@ -178,36 +180,42 @@ def _(mo):
 
 @app.cell
 def _(advertising_df, mo):
-    # STATISTICAL SUMMARY
-    stats = advertising_df.describe().T.round(2)
+    # Statistical summary
+    stats_overview = advertising_df.describe().T.round(2)
     mo.vstack([
         mo.md("## 📊 Statistical Overview"),
-        mo.ui.table(stats, selection=None)
+        mo.ui.table(stats_overview, selection=None)
     ])
     return
 
 
 @app.cell
-def _(advertising_df, mo, plt, sns):
+def _(advertising_df, mo, pd, plt, sns):
     # Correlation Matrix
-    corr_matrix = advertising_df.corr(numeric_only=True)
+    def analyze_correlations(df: pd.DataFrame):
+        corr_matrix = df.corr(numeric_only=True)
+    
+        fig, ax = plt.subplots(figsize=(10, 7))
+        sns.heatmap(
+            corr_matrix, 
+            annot=True, 
+            fmt=".2f", 
+            cmap="coolwarm", 
+            linewidths=0.5, 
+            ax=ax
+        )
+        ax.set_title("Feature Correlation Matrix", pad=20, weight='bold')
+        plt.close()
 
-    _fig, _ax = plt.subplots(figsize=(10, 7))
+        return corr_matrix, fig
 
-    sns.heatmap(
-        corr_matrix,
-        annot=True,
-        fmt=".2f",
-        cmap="coolwarm",
-        linewidths=0.5,
-        ax=_ax
-    )
+    # results
+    correlations, corr_plot = analyze_correlations(advertising_df)
 
-    _ax.set_title("Correlation Matrix of Ad Clicks Features", pad=20, fontsize=14, weight='bold')
-
+    # Display the interface
     mo.vstack([
         mo.md("## 🌡️ Feature Correlation Analysis"),
-        _fig,
+        corr_plot
     ])
     return
 
@@ -226,72 +234,112 @@ def _(mo):
 
 
 @app.cell
-def _(advertising_df, mo, sns):
+def _(advertising_df, mo, plt, sns):
     # Daily Internet Usage vs Daily Time Spent on Site vs Target
-    joint_plot = sns.jointplot(
-        data=advertising_df, 
-        x='Daily Time Spent on Site', 
-        y='Daily Internet Usage', 
-        hue='Clicked on Ad', 
-        palette='coolwarm', 
-        alpha=0.7
+    def get_usage_jointplot(df, x, y, hue):
+        # Creating a jointplot to separate classes
+        joint_plot = sns.jointplot(
+            data=df, 
+            x=x, 
+            y=y, 
+            hue=hue, 
+            palette='coolwarm', 
+            alpha=0.7
+        )
+    
+        plt.close() 
+        return joint_plot.fig
+
+    # Prep. visual
+    usage_fig = get_usage_jointplot(
+        advertising_df, 
+        'Daily Time Spent on Site', 
+        'Daily Internet Usage', 
+        'Clicked on Ad'
     )
-    joint_fig = joint_plot.fig
 
     mo.vstack([
         mo.md("## 📈 Daily Internet Usage vs Daily Time Spent on Site"),
-        joint_fig,
+        usage_fig,
         mo.md("""
         * **Cluster Separation:** The Jointplot reveals two distinct groups. The "High Usage" group (blue), who spend significant time on both the site and the internet, almost never click on the ad.
+
         * **Target Audience:** The "Low Usage" group (red) is our primary target. They spend less time online, and they are the ones consistently interacting with the advertisement.
+
         * **Model Predictability:** The classes are nearly perfectly separable. This is a strong indicator that our classification model will likely achieve very high accuracy.
+
     """)
     ])
     return
 
 
 @app.cell
-def _(advertising_df, mo, sns):
+def _(advertising_df, mo, plt, sns):
     # Age vs Time on Site Analysis vs Target
-    joint_plot_age_time = sns.jointplot(
-        data=advertising_df, 
-        x='Age', 
-        y='Daily Time Spent on Site', 
-        hue='Clicked on Ad', 
-        palette='coolwarm', 
-        alpha=0.7,
-        kind='scatter'
+    def get_age_usage_plot(df, x, y, hue):
+        plot = sns.jointplot(
+            data=df, 
+            x=x, 
+            y=y, 
+            hue=hue, 
+            palette='coolwarm', 
+            alpha=0.7, 
+            kind='scatter'
+        )
+    
+        plt.close()
+        return plot.fig
+
+    age_site_fig = get_age_usage_plot(
+        advertising_df, 
+        'Age', 
+        'Daily Time Spent on Site', 
+        'Clicked on Ad'
     )
-    joint_fig_age_time = joint_plot_age_time.fig
 
     mo.vstack([
-        mo.md("## 📈 Age vs. Time on Site Analysis"),
-        joint_fig_age_time,
+        mo.md("## 📈 Age vs. Time on Site"),
+        age_site_fig,
         mo.md("""
+
         * **Demographic Patterns:** There is a distinct split in behavior. Younger users with high site engagement (top-left) rarely click on ads, while older users with lower site engagement (bottom-right) are the primary clickers.
+
         * **Negative Correlation:** The visual confirms the negative correlation between age and time spent on site.
+
         * **High Separability:** The minimal overlap between classes suggests that our classification model will perform exceptionally well using these two features.
+
         """)
     ])
     return
 
 
 @app.cell
-def _(advertising_df, mo, sns):
+def _(advertising_df, mo, plt, sns):
     # Age vs Area incole vs Target
-    joint_plot_age_income = sns.jointplot(
-        data=advertising_df, 
-        x='Age', 
-        y='Area Income', 
-        hue='Clicked on Ad', 
-        palette='coolwarm', 
-        alpha=0.7
+
+    def get_age_income_plot(df, x, y, hue):
+        plot = sns.jointplot(
+            data=df, 
+            x=x, 
+            y=y, 
+            hue=hue, 
+            palette='coolwarm', 
+            alpha=0.7
+        )
+    
+        plt.close()
+        return plot.fig
+
+    age_income_fig = get_age_income_plot(
+        advertising_df, 
+        'Age', 
+        'Area Income', 
+        'Clicked on Ad'
     )
-    joint_fig_age_income = joint_plot_age_income.fig
 
     mo.vstack([
         mo.md("## 💰 Age vs. Area Income"),
-        joint_fig_age_income,
+        age_income_fig,
         mo.md("""
         * **Noticeable Overlap:** Unlike previous plots, there's much more mixing here. Age and Income alone don't separate the groups perfectly.
         * **General Trend:** We still see that older users with lower area income (bottom-right) are more likely to click, but it's less obvious.
@@ -317,29 +365,27 @@ def _(advertising_df, mo):
 def _(advertising_df, mo, pd):
     # feature Engineering: add and drop columns
 
-    # Copy the original dataset
-    processed_advertising = advertising_df.copy()
+    def process_advertising_data(df: pd.DataFrame) -> pd.DataFrame:
+        processed_df = df.copy()
+    
+        # Convert Timestamp to datetime
+        timestamp = pd.to_datetime(processed_df['Timestamp'])
+    
+        # Feature Engineering: is_weekend and is_evening
+        processed_df['is_weekend'] = (timestamp.dt.dayofweek >= 5).astype(int)
+        processed_df['is_evening'] = (timestamp.dt.hour >= 18).astype(int)
+    
+        # Drop unnecessary columns
+        to_drop = ['City', 'Country', 'Timestamp', 'Ad Topic Line']
+        return processed_df.drop(columns=to_drop, errors='ignore')
 
-    # Time Processing (Binning)
-    processed_advertising['Timestamp'] = pd.to_datetime(processed_advertising['Timestamp'])
+    # Prepare the processed dataset
+    processed_advertising = process_advertising_data(advertising_df)
 
-    # Create is_weekend: 1 if it's the weekend (index 5 and 6), 0 otherwise
-    processed_advertising['is_weekend'] = (processed_advertising['Timestamp'].dt.dayofweek >= 5).astype(int)
-
-    # Create is_evening: 1 if it's evening/night (e.g., 18:00 to 23:59), 0 otherwise
-    processed_advertising['is_evening'] = (processed_advertising['Timestamp'].dt.hour >= 18).astype(int)
-
-    # drop columns
-    columns_to_drop = [
-        'City', 
-        'Country', 
-        'Timestamp', 
-        'Ad Topic Line'
-    ]
-
-    processed_advertising = processed_advertising.drop(columns=columns_to_drop, errors='ignore')
-
-    mo.ui.table(processed_advertising, label="Processed Data Preview")
+    mo.vstack([
+        mo.md("## 🛠️ Processed Data"),
+        mo.ui.table(processed_advertising, label="Processed Data Preview")
+    ])
     return (processed_advertising,)
 
 
@@ -347,43 +393,37 @@ def _(advertising_df, mo, pd):
 def _(
     ColumnTransformer,
     StandardScaler,
+    pd,
     processed_advertising,
     train_test_split,
 ):
-    # Train/Test Split, Scaling
+    # Train/Test Split, Scaling, Preprocessor
+    # Train/Test Split, Scaling, Preprocessor
+    def prepare_ml_data(df: pd.DataFrame, target: str):
+        # Data splitting
+        X = df.drop(columns=[target])
+        y = df[target]
+    
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+    
+        # Preprocessor setup
+        num_cols = ['Daily Time Spent on Site', 'Age', 'Area Income', 'Daily Internet Usage']
+        bin_cols = ['Male', 'is_weekend', 'is_evening']
+    
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', StandardScaler(), num_cols),
+                ('bin', 'passthrough', bin_cols)
+            ],
+            verbose_feature_names_out=False
+        ).set_output(transform="pandas")
+    
+        return X_train, X_test, y_train, y_test, preprocessor
 
-    # Separating features and target
-    X = processed_advertising.drop('Clicked on Ad', axis=1)
-    y = processed_advertising['Clicked on Ad']
-
-    # Train/Test Split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, 
-        test_size=0.2, 
-        random_state=42, 
-        stratify=y
-    )
-
-    numeric_features = [
-        'Daily Time Spent on Site', 
-        'Age', 
-        'Area Income', 
-        'Daily Internet Usage'
-    ]
-
-    binary_features = ['Male', 'is_weekend', 'is_evening']
-
-    # ColumnTransformer
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', StandardScaler(), numeric_features),
-            ('bin', 'passthrough', binary_features)
-        ],
-        verbose_feature_names_out=False
-    )
-
-    # Output as Pandas DataFrame
-    preprocessor.set_output(transform="pandas")
+    # Calling the function and assigning variables
+    X_train, X_test, y_train, y_test, preprocessor = prepare_ml_data(processed_advertising, 'Clicked on Ad')
     return X_test, X_train, preprocessor, y_test, y_train
 
 
@@ -402,46 +442,41 @@ def _(
     y_train,
 ):
     # Models and Pipeline
-    models = {
-        'LogReg': LogisticRegression(max_iter=1000, class_weight='balanced'),
-        'RandomForest': RandomForestClassifier(random_state=42, class_weight='balanced'),
-        "Gradient Boosting": GradientBoostingClassifier(random_state=42)
-    }
+    def evaluate_models(X, y, preprocessor):
+        # Define models
+        models = {
+            'LogReg': LogisticRegression(max_iter=1000, class_weight='balanced'),
+            'RandomForest': RandomForestClassifier(random_state=42, class_weight='balanced'),
+            'GradientBoosting': GradientBoostingClassifier(random_state=42)
+        }
+    
+        # List of metrics
+        metrics = ['roc_auc', 'accuracy', 'precision', 'f1']
+        results = []
 
-    scoring_metrics = ['roc_auc', 'accuracy', 'precision', 'recall', 'f1']
+        for name, model in models.items():
+            # Create pipeline and validate
+            pipe = Pipeline([('pre', preprocessor), ('clf', model)])
+            cv = cross_validate(pipe, X, y, cv=5, scoring=metrics, n_jobs=-1)
+        
+            # Collecting results
+            results.append({
+                'Model': name,
+                'ROC-AUC': np.mean(cv['test_roc_auc']),
+                'Accuracy': np.mean(cv['test_accuracy']),
+                'Precision': np.mean(cv['test_precision']),
+                'F1-Score': np.mean(cv['test_f1'])
+            })
+    
+        return pd.DataFrame(results).sort_values('ROC-AUC', ascending=False)
 
-    model_comparison = []
+    # Evaluate models
+    comparison_df = evaluate_models(X_train, y_train, preprocessor)
 
-    # Evaluating models, Cross validation
-    for name, model in models.items():
-
-        pipeline = Pipeline(steps=[
-            ('preprocessor', preprocessor),
-            ('classifier', model)
-        ])
-
-        cv_results = cross_validate(
-            pipeline, 
-            X_train, 
-            y_train, 
-            cv=5, 
-            scoring=scoring_metrics,
-            n_jobs=-1
-        )
-
-        model_comparison.append({
-            'Model': name, 
-            'ROC-AUC': np.mean(cv_results['test_roc_auc']),
-            'Accuracy': np.mean(cv_results['test_accuracy']),
-            'Precision': np.mean(cv_results['test_precision']),
-            'Recall': np.mean(cv_results['test_recall']),
-            'F1-Score': np.mean(cv_results['test_f1'])
-        })
-
-
-
-    results_df = pd.DataFrame(model_comparison).sort_values('ROC-AUC', ascending=False)
-    mo.ui.table(results_df.round(4), label="Model Evaluation Results")
+    mo.vstack([
+        mo.md("## 🏆 Model Evaluation Results"),
+        mo.ui.table(comparison_df.round(4), selection=None)
+    ])
     return
 
 
@@ -465,40 +500,45 @@ def _(
 ):
     # Hyperparameter Tuning via GridSearchCV 
 
-    # Re-initializing the pipeline
-    log_reg_pipeline = Pipeline(steps=[
-        ('preprocessor', preprocessor),
-        ('classifier', LogisticRegression(random_state=42, max_iter=2000))
-    ])
+    def log_reg_tuning(X, y, preprocessor):
+    
+        # Define the pipeline
+        pipe = Pipeline([
+            ('pre', preprocessor),
+            ('clf', LogisticRegression(random_state=42, max_iter=2000))
+        ])
 
-    param_grid = {
-        'classifier__C': [0.1, 1, 10, 100],
-        'classifier__solver': ['saga'],
-        'classifier__l1_ratio': [0, 0.5, 1]
-    }
+        # Parameter grid exactly as requested
+        param_grid = {
+            'clf__C': [0.1, 1, 10, 100],
+            'clf__solver': ['saga'],
+            'clf__l1_ratio': [0, 0.5, 1]
+        }
 
-    grid_search = GridSearchCV(
-        estimator=log_reg_pipeline,
-        param_grid=param_grid,
-        cv=5,               
-        scoring='accuracy',
-        n_jobs=-1,
-        verbose=1
-    )
+        # Grid Search configuration
+        grid = GridSearchCV(
+            estimator=pipe,
+            param_grid=param_grid,
+            cv=5,
+            scoring='accuracy',
+            n_jobs=-1
+        )
+    
+        return grid.fit(X, y)
 
-    grid_search.fit(X_train, y_train)
+    # Running the optimization
+    tuning_results = log_reg_tuning(X_train, y_train, preprocessor)
 
-    best_log_reg = grid_search.best_estimator_
-    best_params = grid_search.best_params_
-
+    # Displaying the best parameters
+    best_params = tuning_results.best_params_
 
     mo.md(f"""
-    ### Optimization Results
-    * **(CV Accuracy):** `{grid_search.best_score_:.2%}`
-    * **(C):** `{best_params['classifier__C']}`
-    * **(L1 Ratio):** `{best_params['classifier__l1_ratio']}`
+    ### 🚀 Optimization Results
+    * **CV Accuracy:** `{tuning_results.best_score_:.2%}`
+    * **Best C:** `{best_params['clf__C']}`
+    * **Best L1 Ratio:** `{best_params['clf__l1_ratio']}`
     """)
-    return (grid_search,)
+    return (tuning_results,)
 
 
 @app.cell
@@ -507,28 +547,36 @@ def _(
     RocCurveDisplay,
     X_test,
     classification_report,
-    grid_search,
     mo,
     plt,
+    tuning_results,
     y_test,
 ):
     # Predictions on test data. Confussion Matrix, Roc Curve
-    y_pred = grid_search.predict(X_test)
-    report = classification_report(y_test, y_pred)
+    def evaluate_final_model(model, X_test, y_test):
+        # Predictions and metrics
+        y_pred = model.predict(X_test)
+        report = classification_report(y_test, y_pred)
 
-    fig_eval, ax_eval = plt.subplots(1, 2, figsize=(12, 5))
+        # Visual
+        fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+    
+        ConfusionMatrixDisplay.from_estimator(model, X_test, y_test, cmap='Blues', ax=ax[0])
+        RocCurveDisplay.from_estimator(model, X_test, y_test, ax=ax[1])
+    
+        plt.tight_layout()
+        plt.close()
+    
+        return report, fig
 
-    ConfusionMatrixDisplay.from_estimator(
-        grid_search, X_test, y_test, cmap='Blues', ax=ax_eval[0]
-    )
-    RocCurveDisplay.from_estimator(
-        grid_search, X_test, y_test, ax=ax_eval[1]
-    )
+    # Run evaluation
+    final_report, eval_fig = evaluate_final_model(tuning_results.best_estimator_, X_test, y_test)
 
+    # Display 
     mo.vstack([
-        mo.md("## Model Evaluation on Test Set"),
-        mo.md(f"```\n{report}\n```"),
-        mo.as_html(fig_eval)
+        mo.md("## Final Evaluation"),
+        mo.md(f"```\n{final_report}\n```"),
+        eval_fig
     ])
     return
 
@@ -542,31 +590,30 @@ def _(mo):
 
 
 @app.cell
-def _(grid_search, mo, pd, plt):
-    # Features Importance
-    names = grid_search.best_estimator_['preprocessor'].get_feature_names_out()
-    coefs = grid_search.best_estimator_['classifier'].coef_[0]
+def _(X_test, mo, plt, shap, tuning_results):
+    # Features Importance with shap
 
-    signed_features = pd.Series(coefs, index=names).sort_values(ascending=False).head(10)
+    def shap_impact(best_pipeline, X_input):
+    
+        X_tx = best_pipeline['pre'].transform(X_input)
+    
+        explainer = shap.Explainer(best_pipeline['clf'], X_tx)
+        shap_values = explainer(X_tx)
+    
+        plt.figure(figsize=(10, 6))
+        shap.plots.beeswarm(shap_values, show=False)
+        plt.tight_layout()
+    
+        return plt.gcf()
 
-    fig_sgn, ax_sgn = plt.subplots(figsize=(10, 6))
+    shap_plot = shap_impact(tuning_results.best_estimator_, X_test)
 
-    signed_features.plot(kind='barh', color='steelblue', ax=ax_sgn)
-
-    ax_sgn.axvline(0, color='black', linewidth=1)
-
-    for bar in ax_sgn.patches:
-        if bar.get_width() < 0:
-            bar.set_color('indianred')
-
-    ax_sgn.set_title("Top 10 Feature Weights")
-    ax_sgn.set_xlabel("Coefficient Weight")
-    plt.tight_layout()
-
+    # შედეგის გამოტანა ორ ენაზე
     mo.vstack([
-        mo.md("### **Feature Weights**"),
-        mo.as_html(fig_sgn)
+        mo.md("## 🐝 SHAP: Impact Analysis"),
+        shap_plot,
     ])
+
     return
 
 
